@@ -360,7 +360,7 @@ class AboutDialog(QDialog):
             </div>
 
             <div style='background-color: #F1F8F1; padding: 25px; border-radius: 10px; margin: 25px 35px; text-align: left;'>
-                <p style='margin: 15px 0; font-size: 12px;'><b>Разработчик:</b> Зубенко Диана Сергеевна</p>
+                <p style='margin: 15px 0; font-size: 12px;'><b>Разработчик:</b> Букреева Арина Владимировна</p>
                 <p style='margin: 15px 0; font-size: 12px;'><b>Учебное заведение:</b> ФГБОУ ВО «КубГТУ»</p>
                 <p style='margin: 15px 0; font-size: 12px;'><b>Факультет:</b> Информационных технологий и кибербезопасности</p>
                 <p style='margin: 15px 0; font-size: 12px;'><b>Кафедра:</b> Информационных систем и программирования</p>

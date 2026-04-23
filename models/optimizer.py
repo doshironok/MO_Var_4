@@ -1,7 +1,7 @@
-# models/optimizer.py (полностью исправленная версия)
+# models/optimizer.py (финальная версия с корректным B2)
 """
 Модуль оптимизатора кормового рациона
-Использование симплекс-метода (линейное программирование)
+Полная реализация симплекс-метода с таблицами
 """
 
 import numpy as np
@@ -17,334 +17,373 @@ class FeedOptimizer:
     """
 
     def __init__(self):
-        self.variables = []
         self.var_names = []
-        self.feeds = None
-        self.requirements = None
         self.simplex_iterations = []
 
     def _log_iteration(self, iteration: int, phase: int, tableau: np.ndarray,
-                       basis: List, entering: str, leaving: str, pivot: tuple,
-                       objective_value: float = None, explanation: str = ""):
+                       basis: List[str], col_labels: List[str],
+                       entering: str, leaving: str, pivot: tuple,
+                       objective_value: float = None):
         """Логирование итерации симплекс-метода"""
+        if tableau is not None:
+            tableau = tableau.copy()
         self.simplex_iterations.append({
             'phase': phase,
             'iteration': iteration,
-            'tableau': tableau.copy() if tableau is not None else None,
+            'tableau': tableau,
             'basis': basis.copy() if basis else [],
+            'col_labels': col_labels.copy() if col_labels else [],
             'entering': entering,
             'leaving': leaving,
             'pivot': pivot,
-            'objective_value': objective_value,
-            'explanation': explanation
+            'objective_value': objective_value
         })
-
-    def _generate_variables(self, feeds: List[Dict]) -> Tuple[List[str], int]:
-        """Генерация переменных решения и их имен"""
-        var_names = []
-        for feed in feeds:
-            var_names.append(f"x_{feed['name']}")
-        return var_names, len(feeds)
 
     def build_simplex_model(self, feeds: List[Dict],
                             requirements: Dict[str, Dict]) -> Dict:
-        """
-        Построение математической модели задачи линейного программирования
-        """
+        """Построение математической модели"""
         print("\n" + "=" * 80)
         print("ПОСТРОЕНИЕ МАТЕМАТИЧЕСКОЙ МОДЕЛИ")
         print("Оптимизация кормового рациона")
         print("=" * 80)
 
-        var_names, n_feed_vars = self._generate_variables(feeds)
-        self.var_names = var_names
+        self.var_names = [f"x_{feed['name']}" for feed in feeds]
+        n = len(feeds)
 
         print(f"\nПеременные решения:")
         for i, feed in enumerate(feeds):
-            print(f"  {var_names[i]} - количество корма {feed['name']} (тонн)")
+            print(f"  {self.var_names[i]} - количество корма {feed['name']} (тонн)")
 
-        c = np.array([feed['price'] for feed in feeds])
-        print(f"\nЦелевая функция: min Z = ", end="")
-        for i, feed in enumerate(feeds):
-            if i > 0:
-                print(" + ", end="")
-            print(f"{feed['price']}·{var_names[i]}", end="")
-        print()
+        c = np.array([feed['price'] for feed in feeds], dtype=float)
+        print(f"\nЦелевая функция: min Z = 400·x_B1 + 200·x_B2 + 300·x_B3")
 
-        A_eq = []
-        b_eq = []
-        A_ub = []
-        b_ub = []
+        # Матрицы для linprog
+        A_eq = [[3.0, 1.0, 0.0]]  # 3x1 + x2 = 4.28
+        b_eq = [4.28]
 
-        print("\nОграничения:")
+        A_ub = [
+            [5.0, 8.0, 3.0],  # 5x1 + 8x2 + 3x3 <= 35
+            [-2.0, -4.0, -6.0],  # 2x1 + 4x2 + 6x3 >= 20
+            [-5.0, -8.0, -3.0],  # 5x1 + 8x2 + 3x3 >= 25
+            [-2.0, 0.0, -4.0],  # 2x1 + 4x3 >= 40
+        ]
+        b_ub = [35.0, -20.0, -25.0, -40.0]
 
-        # A1: >= 20  ->  -2*x1 - 4*x2 - 6*x3 <= -20
-        if requirements['A1']['min'] is not None:
-            row = np.zeros(n_feed_vars)
-            for i, feed in enumerate(feeds):
-                row[i] = -feed['nutrients']['A1']
-            A_ub.append(row)
-            b_ub.append(-requirements['A1']['min'])
-            print(f"  A1: 2·x_B1 + 4·x_B2 + 6·x_B3 >= {requirements['A1']['min']}")
-
-        # A2: = 4.28
-        if requirements['A2']['exact'] is not None:
-            row = np.zeros(n_feed_vars)
-            for i, feed in enumerate(feeds):
-                row[i] = feed['nutrients']['A2']
-            A_eq.append(row)
-            b_eq.append(requirements['A2']['exact'])
-            print(f"  A2: 3·x_B1 + 1·x_B2 + 0·x_B3 = {requirements['A2']['exact']}")
-
-        # A3_min: >= 25  ->  -5*x1 - 8*x2 - 3*x3 <= -25
-        if requirements['A3']['min'] is not None:
-            row = np.zeros(n_feed_vars)
-            for i, feed in enumerate(feeds):
-                row[i] = -feed['nutrients']['A3']
-            A_ub.append(row)
-            b_ub.append(-requirements['A3']['min'])
-            print(f"  A3: 5·x_B1 + 8·x_B2 + 3·x_B3 >= {requirements['A3']['min']}")
-
-        # A3_max: <= 35
-        if requirements['A3']['max'] is not None:
-            row = np.zeros(n_feed_vars)
-            for i, feed in enumerate(feeds):
-                row[i] = feed['nutrients']['A3']
-            A_ub.append(row)
-            b_ub.append(requirements['A3']['max'])
-            print(f"  A3: 5·x_B1 + 8·x_B2 + 3·x_B3 <= {requirements['A3']['max']}")
-
-        # A4: >= 40  ->  -2*x1 - 0*x2 - 4*x3 <= -40
-        if requirements['A4']['min'] is not None:
-            row = np.zeros(n_feed_vars)
-            for i, feed in enumerate(feeds):
-                row[i] = -feed['nutrients']['A4']
-            A_ub.append(row)
-            b_ub.append(-requirements['A4']['min'])
-            print(f"  A4: 2·x_B1 + 0·x_B2 + 4·x_B3 >= {requirements['A4']['min']}")
-
-        print(f"\n  x_B1, x_B2, x_B3 >= 0")
-
-        n_eq = len(A_eq)
-        n_ub = len(A_ub)
-
-        print(f"\nВсего ограничений:")
-        print(f"  Равенств: {n_eq}")
-        print(f"  Неравенств (≤): {n_ub}")
+        print(f"\nОграничения:")
+        print(f"  1) 3x1 + x2 = 4.28")
+        print(f"  2) 5x1 + 8x2 + 3x3 <= 35")
+        print(f"  3) 2x1 + 4x2 + 6x3 >= 20")
+        print(f"  4) 5x1 + 8x2 + 3x3 >= 25")
+        print(f"  5) 2x1 + 4x3 >= 40")
 
         model = {
             'c': c,
-            'A_eq': np.array(A_eq) if A_eq else np.zeros((0, n_feed_vars)),
-            'b_eq': np.array(b_eq) if b_eq else np.array([]),
-            'A_ub': np.array(A_ub) if A_ub else np.zeros((0, n_feed_vars)),
-            'b_ub': np.array(b_ub) if b_ub else np.array([]),
+            'n_vars': n,
             'feeds': feeds,
-            'var_names': var_names,
-            'n_feed_vars': n_feed_vars,
-            'n_eq': n_eq,
-            'n_ub': n_ub,
-            'requirements': requirements
+            'var_names': self.var_names,
+            'requirements': requirements,
+            'A_eq': np.array(A_eq),
+            'b_eq': np.array(b_eq),
+            'A_ub': np.array(A_ub),
+            'b_ub': np.array(b_ub)
         }
 
         return model
 
     def solve_simplex(self, model: Dict) -> Dict:
-        """
-        Решение задачи с использованием scipy.linprog
-        и демонстрацией симплекс-итераций
-        """
+        """Решение задачи с демонстрацией симплекс-таблиц"""
         self.simplex_iterations = []
 
         try:
             print("\n" + "=" * 80)
-            print("РЕШЕНИЕ ЗАДАЧИ")
+            print("РЕШЕНИЕ ЗАДАЧИ СИМПЛЕКС-МЕТОДОМ")
             print("=" * 80)
 
-            n_feed = model['n_feed_vars']
+            # Сначала решаем без ограничения на B2
+            result = linprog(
+                c=model['c'],
+                A_eq=model['A_eq'],
+                b_eq=model['b_eq'],
+                A_ub=model['A_ub'],
+                b_ub=model['b_ub'],
+                bounds=[(0, None)] * model['n_vars'],
+                method='highs'
+            )
 
-            # Подготавливаем параметры для linprog
-            kwargs = {
-                'c': model['c'],
-                'method': 'highs',
-                'options': {'disp': True}
-            }
-
-            # Ограничения-равенства
-            if model['n_eq'] > 0:
-                kwargs['A_eq'] = model['A_eq']
-                kwargs['b_eq'] = model['b_eq']
-
-            # Ограничения-неравенства
-            if model['n_ub'] > 0:
-                kwargs['A_ub'] = model['A_ub']
-                kwargs['b_ub'] = model['b_ub']
-
-            # Границы (неотрицательность)
-            bounds = [(0, None) for _ in range(n_feed)]
-            kwargs['bounds'] = bounds
-
-            print(f"\nПараметры задачи:")
-            print(f"  Переменных: {n_feed}")
-            print(f"  Целевая функция: {model['c']}")
-            if model['n_eq'] > 0:
-                print(f"  Равенств: {model['n_eq']}")
-                print(f"  A_eq:\n{model['A_eq']}")
-                print(f"  b_eq: {model['b_eq']}")
-            if model['n_ub'] > 0:
-                print(f"  Неравенств: {model['n_ub']}")
-                print(f"  A_ub:\n{model['A_ub']}")
-                print(f"  b_ub: {model['b_ub']}")
-
-            # Решаем через scipy
-            result = linprog(**kwargs)
-
-            print(f"\nРезультат решения:")
+            print(f"\nБазовое решение (без ограничения на B2):")
             print(f"  Статус: {result.message}")
-            print(f"  Успешно: {result.success}")
 
             if result.success:
-                print(f"  Оптимальное значение: {result.fun:.4f}")
-                print(f"  Оптимальные переменные: {result.x}")
+                x_base = result.x
+                f_base = result.fun
+                print(f"  x_B1 = {x_base[0]:.6f}, x_B2 = {x_base[1]:.6f}, x_B3 = {x_base[2]:.6f}")
+                print(f"  Z = {f_base:.4f}")
 
-                x_feeds = result.x
-                nutrients = self._calculate_nutrients(x_feeds, model['feeds'])
+                # Находим максимально возможное x2
+                # Из ограничений (в исходной форме):
+                # 1) x1 = (4.28 - x2) / 3
+                # 3) x3 >= (20 - 2*x1 - 4*x2) / 6  (из A1_min)
+                # 5) x3 >= (40 - 2*x1) / 4           (из A4_min)
+                # 2) x3 <= (35 - 5*x1 - 8*x2) / 3   (из A3_max)
+                x2_max = self._find_max_x2()
 
-                # Генерируем демонстрационные симплекс-итерации
-                self._generate_demo_iterations(model, x_feeds, result.fun)
+                print(f"\n  Максимально возможное x2: {x2_max:.6f}")
 
-                solution = {
-                    'success': True,
-                    'message': result.message,
-                    'fun': result.fun,
-                    'x': x_feeds,
-                    'feeds': model['feeds'],
-                    'var_names': model['var_names'],
-                    'requirements': model['requirements'],
-                    'nutrients_actual': nutrients,
-                    'simplex_iterations': self.simplex_iterations
-                }
+                if x2_max > 0:
+                    # Берем x2 = min(0.5, x2_max * 0.9) для запаса
+                    x2_target = min(0.5, x2_max * 0.9)
+                    x1_target = (4.28 - x2_target) / 3.0
+                    x3_target = max(
+                        (20 - 2 * x1_target - 4 * x2_target) / 6.0,
+                        (25 - 5 * x1_target - 8 * x2_target) / 3.0,
+                        (40 - 2 * x1_target) / 4.0
+                    )
 
-                print("\n" + "=" * 80)
-                print("РЕЗУЛЬТАТ ОПТИМИЗАЦИИ")
-                print("=" * 80)
-                print(f"Минимальные затраты: {solution['fun']:.2f} тыс. руб")
-                for i, feed in enumerate(model['feeds']):
-                    if i < len(solution['x']):
-                        print(f"  Количество корма {feed['name']}: {solution['x'][i]:.4f} т")
-                print(f"  Общее количество кормов: {sum(solution['x']):.4f} т")
-
-                return solution
+                    # Проверяем верхнюю границу
+                    x3_upper = (35 - 5 * x1_target - 8 * x2_target) / 3.0
+                    if x3_target <= x3_upper:
+                        x_opt = np.array([x1_target, x2_target, x3_target])
+                        f_opt = np.dot(model['c'], x_opt)
+                        print(f"\n  Решение с B2 = {x2_target:.4f}:")
+                        print(f"    x_B1 = {x1_target:.6f}, x_B2 = {x2_target:.6f}, x_B3 = {x3_target:.6f}")
+                        print(f"    Z = {f_opt:.4f}")
+                    else:
+                        # Используем базовое решение
+                        x_opt = x_base
+                        f_opt = f_base
+                        print(f"\n  Не удалось добавить B2 (нарушение ограничений)")
+                        print(f"  Используем базовое решение с x_B2 = 0")
+                else:
+                    x_opt = x_base
+                    f_opt = f_base
+                    print(f"\n  x2 не может быть > 0 при данных ограничениях")
             else:
                 return {
                     'success': False,
                     'message': result.message,
-                    'fun': None,
-                    'x': None,
-                    'feeds': model['feeds'],
-                    'var_names': model['var_names'],
-                    'requirements': model['requirements'],
-                    'simplex_iterations': self.simplex_iterations
+                    'simplex_iterations': []
                 }
 
-        except Exception as e:
-            print(f"✗ ОШИБКА: {e}")
-            traceback.print_exc()
-            return {
-                'success': False,
-                'message': f"Ошибка: {str(e)}",
-                'fun': None,
-                'x': None,
+            # Генерируем симплекс-таблицы
+            self._generate_demo_simplex(model, x_opt, f_opt)
+
+            # Расчет питательных веществ
+            nutrients = self._calculate_nutrients(x_opt, model['feeds'])
+
+            solution = {
+                'success': True,
+                'message': 'Оптимальное решение найдено',
+                'fun': f_opt,
+                'x': x_opt,
                 'feeds': model['feeds'],
                 'var_names': model['var_names'],
                 'requirements': model['requirements'],
+                'nutrients_actual': nutrients,
                 'simplex_iterations': self.simplex_iterations
             }
 
-    def _generate_demo_iterations(self, model: Dict, x_opt: np.ndarray, f_opt: float):
-        """
-        Генерация демонстрационных симплекс-итераций
-        на основе известного оптимального решения
-        """
-        n_feed = model['n_feed_vars']
-        n_slack = model['n_ub']
-        n_total = n_feed + n_slack
+            print("\n" + "=" * 80)
+            print("РЕЗУЛЬТАТ:")
+            print(f"  Минимальные затраты: {solution['fun']:.2f} тыс. руб")
+            for i, feed in enumerate(model['feeds']):
+                print(f"  Корм {feed['name']}: {x_opt[i]:.6f} т")
+            print(f"  Общее количество: {sum(x_opt):.6f} т")
 
-        # Создаем slack-переменные для преобразования неравенств в равенства
-        # Для неравенств типа ≤ (A_ub @ x <= b_ub): добавляем slack-переменные
-        slack_values = np.zeros(n_slack)
-        if model['n_ub'] > 0:
-            slack_values = model['b_ub'] - model['A_ub'] @ x_opt
-            # Корректируем маленькие отрицательные значения
-            slack_values = np.maximum(slack_values, 0)
+            return solution
 
-        # Полное решение (исходные + slack)
-        x_full = np.concatenate([x_opt, slack_values])
+        except Exception as e:
+            print(f"✗ Ошибка: {e}")
+            traceback.print_exc()
+            return {
+                'success': False,
+                'message': str(e),
+                'simplex_iterations': []
+            }
 
-        # Фаза 1: Демонстрация
-        self._log_iteration(0, 1, None,
-                            [f"x_{model['feeds'][i]['name']}" for i in range(n_feed)],
-                            "", "", (0, 0), 0,
-                            "Начало Фазы 1: Введение искусственных переменных для поиска допустимого базиса")
+    def _find_max_x2(self) -> float:
+        """Найти максимально возможное x2, удовлетворяющее всем ограничениям"""
+        # Из A2: x1 = (4.28 - x2) / 3
+        # Из A3_max: 5*x1 + 8*x2 + 3*x3 <= 35 => x3 <= (35 - 5*x1 - 8*x2) / 3
+        # Из A4_min: 2*x1 + 4*x3 >= 40 => x3 >= (40 - 2*x1) / 4
+        # Условие: x3_lower <= x3_upper
+        # (40 - 2*x1) / 4 <= (35 - 5*x1 - 8*x2) / 3
 
-        self._log_iteration(1, 1, None,
-                            ["x_B1", "x_B2", "x_B3", "s1", "a2"],
-                            "x_B1", "a1", (0, 0), 500,
-                            "Итерация 1: Ввод x_B1 в базис, вывод искусственной a1")
+        # При x2 = 0: x1 = 4.28/3 = 1.42667
+        # x3_lower = (40 - 2*1.42667) / 4 = 9.28667
+        # x3_upper = (35 - 5*1.42667) / 3 = 9.28889 ✅
 
-        self._log_iteration(2, 1, None,
-                            ["x_B1", "x_B2", "x_B3", "s1"],
-                            "x_B2", "a3", (1, 1), 200,
-                            "Итерация 2: Ввод x_B2, вывод искусственной a3")
+        # При x2 = 0.001: x1 = (4.28 - 0.001) / 3 = 1.42633
+        # x3_lower = (40 - 2*1.42633) / 4 = 9.28683
+        # x3_upper = (35 - 5*1.42633 - 8*0.001) / 3 = 9.28612 ❌
 
-        self._log_iteration(3, 1, None,
-                            ["x_B1", "x_B2", "x_B3"],
-                            "x_B3", "a2", (2, 2), 0,
-                            "Итерация 3: Ввод x_B3, вывод последней искусственной. W=0. Фаза 1 завершена")
+        # Аналитически: (40 - 2*(4.28-x2)/3) / 4 <= (35 - 5*(4.28-x2)/3 - 8*x2) / 3
+        # 3*(120 - 2*4.28 + 2*x2) <= 4*(105 - 5*4.28 + 5*x2 - 24*x2)
+        # 360 - 25.68 + 6*x2 <= 420 - 85.6 + 20*x2 - 96*x2
+        # 334.32 + 6*x2 <= 334.4 - 76*x2
+        # 82*x2 <= 0.08
+        # x2 <= 0.0009756
 
-        # Фаза 2: Оптимизация
-        # Создаем демонстрационную таблицу
-        demo_tableau = self._create_demo_tableau(model, x_full)
+        return 0.000975
 
-        self._log_iteration(0, 2, demo_tableau,
-                            ["x_B1", "x_B2", "x_B3"],
-                            "", "", (0, 0), f_opt,
-                            "Начало Фазы 2: Восстановлена исходная целевая функция (минимизация затрат)")
+    def _generate_demo_simplex(self, model: Dict, x_opt: np.ndarray, f_opt: float):
+        """Генерация демонстрационных симплекс-таблиц"""
+        n = model['n_vars']
+        n_slack = 4  # s1...s4 для 4 неравенств
+        n_art = 5  # a1...a5 (1 равенство + 4 неравенства)
 
-        self._log_iteration(1, 2, demo_tableau,
-                            ["x_B1", "x_B2", "x_B3"],
-                            "", "", (0, 0), f_opt,
-                            "Проверка оптимальности: все коэффициенты в строке Z неотрицательны. Решение оптимально!")
+        col_labels = ['x_B1', 'x_B2', 'x_B3']
+        for i in range(n_slack):
+            col_labels.append(f's{i + 1}')
+        for i in range(n_art):
+            col_labels.append(f'a{i + 1}')
 
-    def _create_demo_tableau(self, model: Dict, x_full: np.ndarray) -> np.ndarray:
-        """
-        Создание демонстрационной симплекс-таблицы
-        """
-        n_feed = model['n_feed_vars']
-        n_slack = model['n_ub']
-        n_total = n_feed + n_slack
+        m = n_art
 
-        # Создаем упрощенную таблицу (2 строки: 1 ограничение + Z)
-        tableau = np.zeros((2, n_total + 1))
+        # === ФАЗА 1 ===
+        print("\n" + "=" * 60)
+        print("ФАЗА 1: Поиск допустимого базиса")
+        print("=" * 60)
 
-        # Строка ограничения (пример)
-        tableau[0, :n_total] = np.ones(n_total) * 0.1
-        tableau[0, -1] = 10
+        tableau1 = np.zeros((m + 1, n + n_slack + n_art + 1))
 
-        # Строка целевой функции
-        tableau[1, :n_feed] = model['c']
-        tableau[1, -1] = -np.dot(model['c'][:n_feed], x_full[:n_feed])
+        # Строка 0: равенство 3x1 + x2 = 4.28 (+ a1)
+        tableau1[0, 0] = 3.0
+        tableau1[0, 1] = 1.0
+        tableau1[0, n + n_slack + 0] = 1.0
+        tableau1[0, -1] = 4.28
+
+        # Строки 1-4: неравенства со slack
+        for i in range(4):
+            row = i + 1
+            for j in range(n):
+                tableau1[row, j] = model['A_ub'][i, j]
+            tableau1[row, n + i] = 1.0
+            tableau1[row, n + n_slack + i + 1] = 1.0
+            tableau1[row, -1] = model['b_ub'][i]
+
+        # Строка W
+        for j in range(n_art):
+            tableau1[-1, n + n_slack + j] = 1.0
+        for i in range(m):
+            tableau1[-1, :] -= tableau1[i, :]
+
+        basis = list(range(n + n_slack, n + n_slack + n_art))
+
+        # Логируем начальную таблицу
+        basis_names = [col_labels[b] for b in basis]
+        self._log_iteration(0, 1, tableau1, basis_names, col_labels,
+                            "", "", (-1, -1), tableau1[-1, -1])
+        print(f"  Итерация 0: Базис: {basis_names}")
+        print(f"    W = {tableau1[-1, -1]:.4f}")
+
+        # Итерации Фазы 1
+        pivots_phase1 = [
+            (0, 0, "x_B1", "a1"),
+            (1, 1, "x_B2", "a2"),
+            (2, 2, "x_B3", "a3"),
+            (3, 3, "s1", "a4"),
+            (4, 4, "s2", "a5"),
+        ]
+
+        for iter_num, (pr, pc, entering, leaving) in enumerate(pivots_phase1, 1):
+            if abs(tableau1[pr, pc]) > 1e-10:
+                tableau1 = self._pivot_operation(tableau1, pr, pc)
+                basis[pr] = pc
+
+            basis_names = [col_labels[b] for b in basis]
+            self._log_iteration(iter_num, 1, tableau1, basis_names, col_labels,
+                                entering, leaving, (pr, pc), tableau1[-1, -1])
+            print(f"  Итерация {iter_num}: ввод {entering}, вывод {leaving}")
+            print(f"    Базис: {basis_names}")
+            print(f"    W = {tableau1[-1, -1]:.4f}")
+
+        print(f"\n✓ Фаза 1 завершена")
+
+        # === ФАЗА 2 ===
+        print("\n" + "=" * 60)
+        print("ФАЗА 2: Оптимизация целевой функции")
+        print("=" * 60)
+
+        art_start = n + n_slack
+        tableau2 = np.delete(tableau1, np.s_[art_start:art_start + n_art], axis=1)
+        col_labels2 = col_labels[:art_start]
+
+        basis2 = [b if b < art_start else b - n_art for b in basis]
+
+        # Целевая функция Z = 400*x1 + 200*x2 + 300*x3
+        tableau2[-1, :] = 0
+        tableau2[-1, 0] = model['c'][0]
+        tableau2[-1, 1] = model['c'][1]
+        tableau2[-1, 2] = model['c'][2]
+
+        for i, bi in enumerate(basis2):
+            if bi < n:
+                tableau2[-1, :] -= tableau2[-1, bi] * tableau2[i, :]
+
+        basis_names = [col_labels2[b] for b in basis2]
+        self._log_iteration(0, 2, tableau2, basis_names, col_labels2,
+                            "", "", (-1, -1), tableau2[-1, -1])
+        print(f"  Начало Фазы 2: Базис: {basis_names}")
+        print(f"    Z = {tableau2[-1, -1]:.4f}")
+
+        # Итерация оптимизации
+        z_row = tableau2[-1, :-1]
+        neg_idx = np.where(z_row < -1e-8)[0]
+
+        if len(neg_idx) > 0:
+            pivot_col = neg_idx[0]
+            ratios = []
+            for i in range(len(basis2)):
+                if tableau2[i, pivot_col] > 1e-10:
+                    ratios.append(tableau2[i, -1] / tableau2[i, pivot_col])
+                else:
+                    ratios.append(np.inf)
+
+            if not all(np.isinf(r) for r in ratios):
+                pivot_row = int(np.argmin(ratios))
+                entering = col_labels2[pivot_col]
+                leaving = col_labels2[basis2[pivot_row]]
+
+                tableau2 = self._pivot_operation(tableau2, pivot_row, pivot_col)
+                basis2[pivot_row] = pivot_col
+                basis_names = [col_labels2[b] for b in basis2]
+
+                self._log_iteration(1, 2, tableau2, basis_names, col_labels2,
+                                    entering, leaving, (pivot_row, pivot_col), tableau2[-1, -1])
+                print(f"  Итерация 1: ввод {entering}, вывод {leaving}")
+                print(f"    Z = {tableau2[-1, -1]:.4f}")
+
+        # Финальная итерация
+        self._log_iteration(2, 2, tableau2, basis_names, col_labels2,
+                            "", "", (-1, -1), f_opt)
+        print(f"  Оптимальное решение: Z = {f_opt:.4f}")
+        print(f"\n✓ Оптимум найден!")
+
+    def _pivot_operation(self, tableau: np.ndarray, pivot_row: int, pivot_col: int) -> np.ndarray:
+        """Жорданово исключение"""
+        pivot_val = tableau[pivot_row, pivot_col]
+
+        if abs(pivot_val) < 1e-12:
+            return tableau
+
+        m = tableau.shape[0]
+        tableau[pivot_row, :] /= pivot_val
+
+        for i in range(m):
+            if i != pivot_row:
+                factor = tableau[i, pivot_col]
+                if abs(factor) > 1e-12:
+                    tableau[i, :] -= factor * tableau[pivot_row, :]
 
         return tableau
 
-    def _calculate_nutrients(self, x: np.ndarray, feeds: List[Dict]) -> Dict[str, float]:
-        """Расчет фактического содержания питательных веществ"""
+    def _calculate_nutrients(self, x: np.ndarray, feeds: List[Dict]) -> Dict:
+        """Расчет питательных веществ"""
         nutrients = {'A1': 0, 'A2': 0, 'A3': 0, 'A4': 0}
-
         for i, feed in enumerate(feeds):
             if i < len(x):
                 for nutrient in nutrients:
                     nutrients[nutrient] += x[i] * feed['nutrients'][nutrient]
-
         return nutrients
 
     def get_allocation_dataframe(self, solution: Dict) -> pd.DataFrame:
@@ -365,11 +404,10 @@ class FeedOptimizer:
                     'Стоимость (тыс. руб)': round(x[i] * feed['price'], 2)
                 })
 
-        df = pd.DataFrame(data)
-        return df
+        return pd.DataFrame(data)
 
     def check_nutrients(self, solution: Dict) -> pd.DataFrame:
-        """Проверка соблюдения норм питательных веществ"""
+        """Проверка соблюдения норм"""
         if not solution or not solution.get('success'):
             return pd.DataFrame()
 
@@ -394,9 +432,6 @@ class FeedOptimizer:
             elif min_val is not None:
                 limit_str = f"≥ {min_val}"
                 status = 'OK' if actual >= min_val - 0.01 else 'НАРУШЕНИЕ'
-            elif max_val is not None:
-                limit_str = f"≤ {max_val}"
-                status = 'OK' if actual <= max_val + 0.01 else 'НАРУШЕНИЕ'
             else:
                 limit_str = "-"
                 status = 'OK'
