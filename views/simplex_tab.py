@@ -1,4 +1,4 @@
-# views/simplex_tab.py
+# views/simplex_tab.py (обновленная версия)
 """
 Модуль вкладки отображения симплекс-итераций
 """
@@ -40,6 +40,12 @@ class SimplexTab(QWidget):
         title_label.setProperty("role", "heading")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title_label)
+
+        # Информация о решении
+        info_label = QLabel("Решение получено с использованием симплекс-метода (scipy.optimize.linprog)")
+        info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        info_label.setStyleSheet("color: #6B8B6B; font-style: italic; margin-bottom: 10px;")
+        layout.addWidget(info_label)
 
         # Выбор фазы и итерации
         control_frame = QFrame()
@@ -110,9 +116,7 @@ class SimplexTab(QWidget):
 
         table_scroll = QScrollArea()
         table_scroll.setWidgetResizable(True)
-        table_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        table_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        table_scroll.setMinimumHeight(350)
+        table_scroll.setMinimumHeight(300)
 
         self.table_widget = QTableWidget()
         self.table_widget.setAlternatingRowColors(True)
@@ -121,8 +125,10 @@ class SimplexTab(QWidget):
                 font-family: 'Consolas', 'Courier New', monospace;
                 font-size: 9pt;
             }
+            QTableWidget::item {
+                padding: 6px;
+            }
         """)
-        self.table_widget.horizontalHeader().setMinimumSectionSize(70)
 
         table_scroll.setWidget(self.table_widget)
         table_layout.addWidget(table_scroll)
@@ -135,22 +141,22 @@ class SimplexTab(QWidget):
         nav_layout = QHBoxLayout(nav_frame)
         nav_layout.setSpacing(10)
 
-        self.prev_btn = QPushButton("◀ Предыдущая итерация")
+        self.prev_btn = QPushButton("◀ Предыдущая")
         self.prev_btn.setMinimumHeight(35)
         self.prev_btn.clicked.connect(self.on_prev_iteration)
         nav_layout.addWidget(self.prev_btn)
 
-        self.next_btn = QPushButton("Следующая итерация ▶")
+        self.next_btn = QPushButton("Следующая ▶")
         self.next_btn.setMinimumHeight(35)
         self.next_btn.clicked.connect(self.on_next_iteration)
         nav_layout.addWidget(self.next_btn)
 
         nav_layout.addStretch()
 
-        self.copy_table_btn = QPushButton("📋 Копировать таблицу")
-        self.copy_table_btn.setMinimumHeight(35)
-        self.copy_table_btn.clicked.connect(self.copy_table_to_clipboard)
-        nav_layout.addWidget(self.copy_table_btn)
+        self.copy_btn = QPushButton("📋 Копировать")
+        self.copy_btn.setMinimumHeight(35)
+        self.copy_btn.clicked.connect(self.copy_to_clipboard)
+        nav_layout.addWidget(self.copy_btn)
 
         layout.addWidget(nav_frame)
 
@@ -161,7 +167,6 @@ class SimplexTab(QWidget):
         self.explanation_text = QTextEdit()
         self.explanation_text.setReadOnly(True)
         self.explanation_text.setMaximumHeight(150)
-        self.explanation_text.setMinimumHeight(120)
         explanation_layout.addWidget(self.explanation_text)
 
         explanation_group.setLayout(explanation_layout)
@@ -191,16 +196,13 @@ class SimplexTab(QWidget):
         if self.phase2_iterations:
             self.phase_combo.addItem("Фаза 2 (оптимизация)")
 
-        if self.phase1_iterations:
+        if self.phase_combo.count() > 0:
             self.phase_combo.setCurrentIndex(0)
             self._update_iteration_combo()
-            self.iteration_combo.setCurrentIndex(len(self.phase1_iterations) - 1)
-            self.display_iteration(len(self.phase1_iterations) - 1, 1)
-        elif self.phase2_iterations:
-            self.phase_combo.setCurrentIndex(0)
-            self._update_iteration_combo()
-            self.iteration_combo.setCurrentIndex(len(self.phase2_iterations) - 1)
-            self.display_iteration(len(self.phase2_iterations) - 1, 2)
+            if self.iteration_combo.count() > 0:
+                self.iteration_combo.setCurrentIndex(0)
+                phase = 1 if "Фаза 1" in self.phase_combo.currentText() else 2
+                self.display_iteration(0, phase)
 
         self.phase_combo.blockSignals(False)
         self.iteration_combo.blockSignals(False)
@@ -217,7 +219,7 @@ class SimplexTab(QWidget):
             iterations = self.phase2_iterations
 
         for i, it in enumerate(iterations):
-            self.iteration_combo.addItem(f"Итерация {it.get('iteration', i)}")
+            self.iteration_combo.addItem(f"Итерация {i}")
 
     def on_phase_changed(self, idx: int):
         """Смена фазы"""
@@ -284,7 +286,7 @@ class SimplexTab(QWidget):
         self.entering_label.setText(entering if entering else "—")
         self.leaving_label.setText(leaving if leaving else "—")
 
-        if pivot and len(pivot) == 2:
+        if pivot and len(pivot) == 2 and pivot[0] >= 0:
             self.pivot_label.setText(f"строка {pivot[0]}, столбец {pivot[1]}")
         else:
             self.pivot_label.setText("—")
@@ -294,18 +296,21 @@ class SimplexTab(QWidget):
             if phase == 1:
                 self.objective_label.setText(f"W = {obj_value:.4f}")
             else:
-                self.objective_label.setText(f"Z = {obj_value:.4f}")
+                self.objective_label.setText(
+                    f"Z = {obj_value:.4f} тыс. руб" if obj_value > 1 else f"Z = {obj_value:.4f}")
         else:
             self.objective_label.setText("—")
 
         basis = iteration_data.get('basis', [])
         if tableau is not None:
-            self._display_tableau(tableau, basis, phase, iter_idx, iteration_data)
+            self._display_tableau(tableau, basis)
+        else:
+            # Если нет таблицы, показываем текстовую информацию
+            self._display_text_info(iteration_data)
 
         self._generate_explanation(iteration_data, phase, iter_idx)
 
-    def _display_tableau(self, tableau: np.ndarray, basis: list, phase: int,
-                         iter_idx: int, iteration_data: dict):
+    def _display_tableau(self, tableau: np.ndarray, basis: list):
         """Отображение симплекс-таблицы"""
         try:
             m, n = tableau.shape
@@ -316,54 +321,31 @@ class SimplexTab(QWidget):
 
             headers = ["Базис"]
             for j in range(n_vars):
-                if j < 3:
-                    headers.append(f"x_B{j + 1}")
-                elif j < 8:
-                    headers.append(f"s{j - 2}")
-                else:
-                    headers.append(f"a{j - 7}")
+                headers.append(f"x{j + 1}")
             headers.append("RHS")
             self.table_widget.setHorizontalHeaderLabels(headers)
 
-            pivot = iteration_data.get('pivot', (-1, -1))
-
             for i in range(m):
-                # Базисная переменная
-                if i < m - 1:
-                    if i < len(basis):
-                        basis_item = QTableWidgetItem(str(basis[i]))
-                    else:
-                        basis_item = QTableWidgetItem("—")
-                    basis_item.setBackground(QBrush(QColor("#F1F8F1")))
-                    basis_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                    self.table_widget.setItem(i, 0, basis_item)
+                if i < m - 1 and i < len(basis):
+                    basis_item = QTableWidgetItem(str(basis[i]))
+                elif i == m - 1:
+                    basis_item = QTableWidgetItem("Z")
+                    basis_item.setBackground(QBrush(QColor("#E8F5E9")))
                 else:
-                    obj_item = QTableWidgetItem("W" if phase == 1 else "Z")
-                    obj_item.setBackground(QBrush(QColor("#E8F5E9")))
-                    obj_item.setFont(QFont("Segoe UI", weight=QFont.Weight.Bold))
-                    obj_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                    self.table_widget.setItem(i, 0, obj_item)
+                    basis_item = QTableWidgetItem("—")
+
+                basis_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.table_widget.setItem(i, 0, basis_item)
 
                 for j in range(n):
                     value = tableau[i, j]
 
                     if abs(value) < 1e-10:
                         display_text = "0"
-                    elif abs(value) > 1000:
-                        display_text = f"{value:.2f}"
-                    elif abs(value) < 0.01:
-                        display_text = f"{value:.6f}"
                     else:
                         display_text = f"{value:.4f}"
 
                     item = QTableWidgetItem(display_text)
-
-                    if i == pivot[0] and j == pivot[1]:
-                        item.setBackground(QBrush(QColor("#4CAF50")))
-                        item.setForeground(QBrush(Qt.GlobalColor.white))
-                        item.setFont(QFont("Segoe UI", weight=QFont.Weight.Bold))
-                    elif i == m - 1:
-                        item.setBackground(QBrush(QColor("#F9FDF9")))
 
                     if i == m - 1 and value < -1e-10:
                         item.setForeground(QBrush(QColor("#E74C3C")))
@@ -371,70 +353,43 @@ class SimplexTab(QWidget):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                     self.table_widget.setItem(i, j + 1, item)
 
-            self.table_widget.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-            for j in range(1, n + 1):
-                self.table_widget.horizontalHeader().setSectionResizeMode(j, QHeaderView.ResizeMode.ResizeToContents)
-                if self.table_widget.columnWidth(j) < 65:
-                    self.table_widget.setColumnWidth(j, 65)
-
         except Exception as e:
-            print(f"Ошибка при отображении таблицы: {e}")
+            print(f"Ошибка отображения таблицы: {e}")
+
+    def _display_text_info(self, iteration_data: dict):
+        """Отображение текстовой информации вместо таблицы"""
+        self.table_widget.setRowCount(1)
+        self.table_widget.setColumnCount(1)
+        self.table_widget.setHorizontalHeaderLabels(["Информация"])
+
+        explanation = iteration_data.get('explanation', 'Нет данных')
+        self.table_widget.setItem(0, 0, QTableWidgetItem(explanation))
 
     def _generate_explanation(self, iteration_data: dict, phase: int, iter_idx: int):
         """Генерация пояснений"""
-        text = ""
-        iter_num = iteration_data.get('iteration', iter_idx)
-        entering = iteration_data.get('entering', '')
-        leaving = iteration_data.get('leaving', '')
+        explanation = iteration_data.get('explanation', '')
+        self.explanation_text.setText(explanation)
 
-        if phase == 1:
-            if iter_idx == 0:
-                text = "🔵 НАЧАЛО ФАЗЫ 1: Поиск допустимого базиса\n\n"
-                text += "Введены искусственные переменные для формирования начального базиса.\n"
-                text += "Цель: минимизировать сумму искусственных переменных (W → 0)."
-            else:
-                text = f"🔄 ИТЕРАЦИЯ {iter_num} ФАЗЫ 1:\n\n"
-                text += f"• В базис вводится {entering}\n"
-                text += f"• Из базиса выводится {leaving}\n"
-                text += f"• Выполнено жорданово исключение"
-
-                obj_value = iteration_data.get('objective_value')
-                if obj_value is not None and abs(obj_value) < 1e-8:
-                    text += "\n\n✅ ФАЗА 1 ЗАВЕРШЕНА: Допустимый базис найден!"
-        else:
-            if iter_idx == 0:
-                text = "🟢 НАЧАЛО ФАЗЫ 2: Оптимизация целевой функции\n\n"
-                text += "Искусственные переменные удалены.\n"
-                text += "Цель: минимизировать затраты на корма."
-            else:
-                text = f"🔄 ИТЕРАЦИЯ {iter_num} ФАЗЫ 2:\n\n"
-                text += f"• В базис вводится {entering}\n"
-                text += f"• Из базиса выводится {leaving}\n"
-                text += f"• Выполнено жорданово исключение"
-
-        self.explanation_text.setText(text)
-
-    def copy_table_to_clipboard(self):
-        """Копирование таблицы в буфер обмена"""
-        if self.table_widget.rowCount() == 0:
-            QMessageBox.information(self, "Информация", "Нет данных для копирования")
+    def copy_to_clipboard(self):
+        """Копирование информации в буфер"""
+        if not self.simplex_iterations:
             return
 
-        text = ""
-        headers = []
-        for j in range(self.table_widget.columnCount()):
-            headers.append(self.table_widget.horizontalHeaderItem(j).text())
-        text += "\t".join(headers) + "\n"
+        text = "Симплекс-метод: сводка итераций\n"
+        text += "=" * 50 + "\n\n"
 
-        for i in range(self.table_widget.rowCount()):
-            row_data = []
-            for j in range(self.table_widget.columnCount()):
-                item = self.table_widget.item(i, j)
-                row_data.append(item.text() if item else "")
-            text += "\t".join(row_data) + "\n"
+        for it in self.simplex_iterations:
+            phase = it.get('phase', 0)
+            iteration = it.get('iteration', 0)
+            explanation = it.get('explanation', '')
+
+            if phase == 1:
+                text += f"Фаза 1, Итерация {iteration}: {explanation}\n"
+            else:
+                text += f"Фаза 2, Итерация {iteration}: {explanation}\n"
 
         QApplication.clipboard().setText(text)
-        QMessageBox.information(self, "Успешно", "Таблица скопирована в буфер обмена")
+        QMessageBox.information(self, "Успешно", "Информация скопирована в буфер обмена")
 
     def show_all_iterations(self):
         """Показать сводку всех итераций"""
@@ -450,53 +405,37 @@ class SimplexTab(QWidget):
 
         text_edit = QTextEdit()
         text_edit.setReadOnly(True)
-        text_edit.setFont(QFont("Consolas", 10))
+        text_edit.setFont(QFont("Segoe UI", 11))
 
-        text = "📐 СВОДКА ВСЕХ ИТЕРАЦИЙ СИМПЛЕКС-МЕТОДА\n"
+        text = "📐 СИМПЛЕКС-МЕТОД: СВОДКА ИТЕРАЦИЙ\n"
         text += "=" * 60 + "\n\n"
 
         if self.phase1_iterations:
             text += "ФАЗА 1 (поиск допустимого базиса):\n"
             text += "-" * 40 + "\n"
             for it in self.phase1_iterations:
-                iter_num = it.get('iteration', 0)
-                entering = it.get('entering', '')
-                leaving = it.get('leaving', '')
-                obj = it.get('objective_value', 0)
-
-                if iter_num == 0:
-                    text += f"  Начало: W = {obj:.4f}\n"
-                else:
-                    text += f"  Итер. {iter_num}: ввод {entering:6s}, вывод {leaving:6s}, W = {obj:.4f}\n"
-            text += f"\n  Всего итераций в Фазе 1: {len(self.phase1_iterations)}\n"
+                explanation = it.get('explanation', '')
+                text += f"  {explanation}\n\n"
+            text += f"  Всего итераций: {len(self.phase1_iterations)}\n\n"
 
         if self.phase2_iterations:
-            text += "\nФАЗА 2 (оптимизация):\n"
+            text += "ФАЗА 2 (оптимизация):\n"
             text += "-" * 40 + "\n"
             for it in self.phase2_iterations:
-                iter_num = it.get('iteration', 0)
-                entering = it.get('entering', '')
-                leaving = it.get('leaving', '')
-                obj = it.get('objective_value', 0)
-
-                if iter_num == 0:
-                    text += f"  Начало: Z = {abs(obj):.4f}\n"
-                else:
-                    text += f"  Итер. {iter_num}: ввод {entering:6s}, вывод {leaving:6s}, Z = {abs(obj):.4f}\n"
-            text += f"\n  Всего итераций в Фазе 2: {len(self.phase2_iterations)}\n"
-
-        if self.phase2_iterations:
-            final_obj = self.phase2_iterations[-1].get('objective_value', 0)
-            text += f"\n✅ ОПТИМАЛЬНОЕ РЕШЕНИЕ: Z = {abs(final_obj):.4f} тыс. руб\n"
+                explanation = it.get('explanation', '')
+                text += f"  {explanation}\n\n"
+            text += f"  Всего итераций: {len(self.phase2_iterations)}\n"
 
         text_edit.setText(text)
         layout.addWidget(text_edit)
 
         btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
         btn_box.accepted.connect(dialog.accept)
+
         copy_btn = QPushButton("📋 Копировать")
         copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(text))
         btn_box.addButton(copy_btn, QDialogButtonBox.ButtonRole.ActionRole)
+
         layout.addWidget(btn_box)
 
         dialog.exec()
@@ -510,10 +449,7 @@ class SimplexTab(QWidget):
         self.table_widget.setRowCount(0)
         self.table_widget.setColumnCount(1)
         self.table_widget.setHorizontalHeaderLabels(["Нет данных"])
-        self.explanation_text.setText(
-            "Нет данных о симплекс-итерациях.\n\n"
-            "Выполните расчет для просмотра пошагового решения."
-        )
+        self.explanation_text.setText("Выполните расчет для просмотра решения")
         self.phase_combo.setEnabled(False)
         self.iteration_combo.setEnabled(False)
         self.prev_btn.setEnabled(False)
