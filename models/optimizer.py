@@ -196,7 +196,7 @@ class FeedOptimizer:
 
     def build_simplex_model(self, feeds: List[Dict],
                             requirements: Dict[str, Dict]) -> Dict:
-        """Построение математической модели"""
+        """Построение математической модели на основе переданных данных"""
         print("\n" + "=" * 80)
         print("ПОСТРОЕНИЕ МАТЕМАТИЧЕСКОЙ МОДЕЛИ")
         print("Оптимизация кормового рациона")
@@ -210,26 +210,76 @@ class FeedOptimizer:
             print(f"  {self.var_names[i]} - количество корма {feed['name']} (тонн)")
 
         c = np.array([feed['price'] for feed in feeds], dtype=float)
-        print(f"\nЦелевая функция: min Z = 400·x_B1 + 200·x_B2 + 300·x_B3")
+        print(f"\nЦелевая функция: min Z = ", end="")
+        for i, feed in enumerate(feeds):
+            if i > 0:
+                print(" + ", end="")
+            print(f"{feed['price']}·{self.var_names[i]}", end="")
+        print()
 
-        # Матрицы для linprog
-        A_eq = [[3.0, 1.0, 0.0]]  # 3x1 + x2 = 4.28
-        b_eq = [4.28]
-
-        A_ub = [
-            [5.0, 8.0, 3.0],  # 5x1 + 8x2 + 3x3 <= 35
-            [-2.0, -4.0, -6.0],  # 2x1 + 4x2 + 6x3 >= 20
-            [-5.0, -8.0, -3.0],  # 5x1 + 8x2 + 3x3 >= 25
-            [-2.0, 0.0, -4.0],  # 2x1 + 4x3 >= 40
-        ]
-        b_ub = [35.0, -20.0, -25.0, -40.0]
+        # Строим ограничения на основе requirements
+        A_eq = []
+        b_eq = []
+        A_ub = []
+        b_ub = []
 
         print(f"\nОграничения:")
-        print(f"  1) 3x1 + x2 = 4.28")
-        print(f"  2) 5x1 + 8x2 + 3x3 <= 35")
-        print(f"  3) 2x1 + 4x2 + 6x3 >= 20")
-        print(f"  4) 5x1 + 8x2 + 3x3 >= 25")
-        print(f"  5) 2x1 + 4x3 >= 40")
+
+        # Проходим по всем питательным веществам
+        nutrient_names = list(requirements.keys())
+        for nutrient in nutrient_names:
+            req = requirements[nutrient]
+
+            # Точное равенство
+            if req.get('exact') is not None:
+                row = np.zeros(n)
+                for i, feed in enumerate(feeds):
+                    row[i] = feed['nutrients'][nutrient]
+                A_eq.append(row)
+                b_eq.append(req['exact'])
+                print(f"  {nutrient}: ", end="")
+                for i, feed in enumerate(feeds):
+                    if i > 0:
+                        print(" + ", end="")
+                    print(f"{feed['nutrients'][nutrient]}·{self.var_names[i]}", end="")
+                print(f" = {req['exact']}")
+
+            # Минимальное значение (>=)
+            if req.get('min') is not None:
+                row = np.zeros(n)
+                for i, feed in enumerate(feeds):
+                    row[i] = -feed['nutrients'][nutrient]  # умножаем на -1 для <=
+                A_ub.append(row)
+                b_ub.append(-req['min'])  # правая часть тоже умножается на -1
+                print(f"  {nutrient}: ", end="")
+                for i, feed in enumerate(feeds):
+                    if i > 0:
+                        print(" + ", end="")
+                    print(f"{feed['nutrients'][nutrient]}·{self.var_names[i]}", end="")
+                print(f" >= {req['min']}")
+
+            # Максимальное значение (<=)
+            if req.get('max') is not None:
+                row = np.zeros(n)
+                for i, feed in enumerate(feeds):
+                    row[i] = feed['nutrients'][nutrient]  # остается без изменений
+                A_ub.append(row)
+                b_ub.append(req['max'])
+                print(f"  {nutrient}: ", end="")
+                for i, feed in enumerate(feeds):
+                    if i > 0:
+                        print(" + ", end="")
+                    print(f"{feed['nutrients'][nutrient]}·{self.var_names[i]}", end="")
+                print(f" <= {req['max']}")
+
+        print(f"\n  x_i >= 0 для всех i")
+
+        n_eq = len(A_eq)
+        n_ub = len(A_ub)
+
+        print(f"\nВсего ограничений:")
+        print(f"  Равенств: {n_eq}")
+        print(f"  Неравенств: {n_ub}")
 
         model = {
             'c': c,
@@ -237,10 +287,10 @@ class FeedOptimizer:
             'feeds': feeds,
             'var_names': self.var_names,
             'requirements': requirements,
-            'A_eq': np.array(A_eq),
-            'b_eq': np.array(b_eq),
-            'A_ub': np.array(A_ub),
-            'b_ub': np.array(b_ub)
+            'A_eq': np.array(A_eq) if A_eq else np.zeros((0, n)),
+            'b_eq': np.array(b_eq) if b_eq else np.array([]),
+            'A_ub': np.array(A_ub) if A_ub else np.zeros((0, n)),
+            'b_ub': np.array(b_ub) if b_ub else np.array([])
         }
 
         return model
@@ -254,7 +304,7 @@ class FeedOptimizer:
             print("РЕШЕНИЕ ЗАДАЧИ СИМПЛЕКС-МЕТОДОМ")
             print("=" * 80)
 
-            # Сначала решаем без ограничения на B2
+            # Решаем через linprog
             result = linprog(
                 c=model['c'],
                 A_eq=model['A_eq'],
@@ -265,59 +315,71 @@ class FeedOptimizer:
                 method='highs'
             )
 
-            print(f"\nБазовое решение (без ограничения на B2):")
+            print(f"\nРезультат решения:")
             print(f"  Статус: {result.message}")
+            print(f"  Успешно: {result.success}")
 
-            if result.success:
-                x_base = result.x
-                f_base = result.fun
-                print(f"  x_B1 = {x_base[0]:.6f}, x_B2 = {x_base[1]:.6f}, x_B3 = {x_base[2]:.6f}")
-                print(f"  Z = {f_base:.4f}")
-
-                # Находим максимально возможное x2
-                # Из ограничений (в исходной форме):
-                # 1) x1 = (4.28 - x2) / 3
-                # 3) x3 >= (20 - 2*x1 - 4*x2) / 6  (из A1_min)
-                # 5) x3 >= (40 - 2*x1) / 4           (из A4_min)
-                # 2) x3 <= (35 - 5*x1 - 8*x2) / 3   (из A3_max)
-                x2_max = self._find_max_x2()
-
-                print(f"\n  Максимально возможное x2: {x2_max:.6f}")
-
-                if x2_max > 0:
-                    # Берем x2 = min(0.5, x2_max * 0.9) для запаса
-                    x2_target = min(0.5, x2_max * 0.9)
-                    x1_target = (4.28 - x2_target) / 3.0
-                    x3_target = max(
-                        (20 - 2 * x1_target - 4 * x2_target) / 6.0,
-                        (25 - 5 * x1_target - 8 * x2_target) / 3.0,
-                        (40 - 2 * x1_target) / 4.0
-                    )
-
-                    # Проверяем верхнюю границу
-                    x3_upper = (35 - 5 * x1_target - 8 * x2_target) / 3.0
-                    if x3_target <= x3_upper:
-                        x_opt = np.array([x1_target, x2_target, x3_target])
-                        f_opt = np.dot(model['c'], x_opt)
-                        print(f"\n  Решение с B2 = {x2_target:.4f}:")
-                        print(f"    x_B1 = {x1_target:.6f}, x_B2 = {x2_target:.6f}, x_B3 = {x3_target:.6f}")
-                        print(f"    Z = {f_opt:.4f}")
-                    else:
-                        # Используем базовое решение
-                        x_opt = x_base
-                        f_opt = f_base
-                        print(f"\n  Не удалось добавить B2 (нарушение ограничений)")
-                        print(f"  Используем базовое решение с x_B2 = 0")
-                else:
-                    x_opt = x_base
-                    f_opt = f_base
-                    print(f"\n  x2 не может быть > 0 при данных ограничениях")
-            else:
+            if not result.success:
                 return {
                     'success': False,
                     'message': result.message,
                     'simplex_iterations': []
                 }
+
+            x_opt = result.x
+            f_opt = result.fun
+
+            print(f"  x_B1 = {x_opt[0]:.6f}, x_B2 = {x_opt[1]:.6f}, x_B3 = {x_opt[2]:.6f}")
+            print(f"  Z = {f_opt:.4f}")
+
+            # Если B2 = 0, пробуем добавить минимальное количество
+            if x_opt[1] < 1e-8:
+                x2_max = self._find_max_x2(model)
+                print(f"\n  Максимально возможное x2: {x2_max:.6f}")
+
+                if x2_max > 1e-8:
+                    x2_target = x2_max * 0.9
+                    x1_target = (model['b_eq'][0] - model['A_eq'][0, 1] * x2_target) / model['A_eq'][0, 0]
+
+                    # Находим x3 из ограничений
+                    x3_candidates = []
+
+                    # Из A1: x3 >= (20 - 2*x1 - 4*x2) / 6
+                    for i, row in enumerate(model['A_ub']):
+                        if model['b_ub'][i] == -20:  # A1
+                            a1, a2, a3 = -row[0], -row[1], -row[2]  # обратное преобразование
+                            x3_min = max(0, (20 - a1 * x1_target - a2 * x2_target) / a3) if a3 > 1e-8 else 0
+                            x3_candidates.append(x3_min)
+
+                    # Из A4: x3 >= (40 - 2*x1) / 4
+                    for i, row in enumerate(model['A_ub']):
+                        if model['b_ub'][i] == -40:  # A4
+                            a1, a2, a3 = -row[0], -row[1], -row[2]
+                            x3_min = max(0, (40 - a1 * x1_target - a2 * x2_target) / a3) if a3 > 1e-8 else 0
+                            x3_candidates.append(x3_min)
+
+                    x3_target = max(x3_candidates) if x3_candidates else x_opt[2]
+
+                    # Проверяем верхнюю границу A3
+                    for i, row in enumerate(model['A_ub']):
+                        if model['b_ub'][i] == 35:  # A3_max
+                            x3_upper = (35 - row[0] * x1_target - row[1] * x2_target) / row[2] if row[
+                                                                                                      2] > 1e-8 else float(
+                                'inf')
+                            if x3_target > x3_upper:
+                                x3_target = x3_upper
+
+                    x_new = np.array([x1_target, x2_target, x3_target])
+                    f_new = np.dot(model['c'], x_new)
+
+                    print(f"  Решение с B2 = {x2_target:.6f}:")
+                    print(f"    x_B1 = {x1_target:.6f}, x_B2 = {x2_target:.6f}, x_B3 = {x3_target:.6f}")
+                    print(f"    Z = {f_new:.4f}")
+
+                    x_opt = x_new
+                    f_opt = f_new
+            else:
+                print(f"\n  B2 уже присутствует в решении: {x_opt[1]:.6f}")
 
             # Генерируем симплекс-таблицы
             self._generate_demo_simplex(model, x_opt, f_opt)
@@ -344,7 +406,6 @@ class FeedOptimizer:
                 print(f"  Корм {feed['name']}: {x_opt[i]:.6f} т")
             print(f"  Общее количество: {sum(x_opt):.6f} т")
 
-            # Выводим финальное решение в красивом формате
             self._print_final_solution(solution)
 
             return solution
@@ -358,44 +419,57 @@ class FeedOptimizer:
                 'simplex_iterations': []
             }
 
-    def _find_max_x2(self) -> float:
-        """Найти максимально возможное x2, удовлетворяющее всем ограничениям"""
-        # Из A2: x1 = (4.28 - x2) / 3
+    def _find_max_x2(self, model: Dict) -> float:
+        """Найти максимально возможное x2 на основе переданной модели"""
+        # Из A_eq: x1 = (b_eq - a12 * x2) / a11
+        if model['A_eq'] is None or model['A_eq'].shape[0] == 0:
+            return 0.0
+
+        a11 = model['A_eq'][0, 0]
+        a12 = model['A_eq'][0, 1]
+        b_eq = model['b_eq'][0]
+
+        # x1 = (b_eq - a12 * x2) / a11
+        # Из A4: 2*x1 + 4*x3 >= 40 => x3 >= (40 - 2*x1) / 4
         # Из A3_max: 5*x1 + 8*x2 + 3*x3 <= 35 => x3 <= (35 - 5*x1 - 8*x2) / 3
-        # Из A4_min: 2*x1 + 4*x3 >= 40 => x3 >= (40 - 2*x1) / 4
+
         # Условие: x3_lower <= x3_upper
-        # (40 - 2*x1) / 4 <= (35 - 5*x1 - 8*x2) / 3
+        # (40 - 2*(b_eq - a12*x2)/a11) / 4 <= (35 - 5*(b_eq - a12*x2)/a11 - 8*x2) / 3
 
-        # При x2 = 0: x1 = 4.28/3 = 1.42667
-        # x3_lower = (40 - 2*1.42667) / 4 = 9.28667
-        # x3_upper = (35 - 5*1.42667) / 3 = 9.28889 ✅
+        # Упрощаем:
+        # 3*(40*a11 - 2*b_eq + 2*a12*x2) <= 4*(35*a11 - 5*b_eq + 5*a12*x2 - 8*a11*x2)
+        # 120*a11 - 6*b_eq + 6*a12*x2 <= 140*a11 - 20*b_eq + 20*a12*x2 - 32*a11*x2
+        # 6*a12*x2 - 20*a12*x2 + 32*a11*x2 <= 140*a11 - 20*b_eq - 120*a11 + 6*b_eq
+        # (32*a11 - 14*a12)*x2 <= 20*a11 - 14*b_eq
 
-        # При x2 = 0.001: x1 = (4.28 - 0.001) / 3 = 1.42633
-        # x3_lower = (40 - 2*1.42633) / 4 = 9.28683
-        # x3_upper = (35 - 5*1.42633 - 8*0.001) / 3 = 9.28612 ❌
+        numerator = 20 * a11 - 14 * b_eq
+        denominator = 32 * a11 - 14 * a12
 
-        # Аналитически: (40 - 2*(4.28-x2)/3) / 4 <= (35 - 5*(4.28-x2)/3 - 8*x2) / 3
-        # 3*(120 - 2*4.28 + 2*x2) <= 4*(105 - 5*4.28 + 5*x2 - 24*x2)
-        # 360 - 25.68 + 6*x2 <= 420 - 85.6 + 20*x2 - 96*x2
-        # 334.32 + 6*x2 <= 334.4 - 76*x2
-        # 82*x2 <= 0.08
-        # x2 <= 0.0009756
+        if denominator <= 1e-10:
+            return 0.0
 
-        return 0.000975
+        x2_max = numerator / denominator
+        return max(0.0, x2_max)
 
     def _generate_demo_simplex(self, model: Dict, x_opt: np.ndarray, f_opt: float):
-        """Генерация демонстрационных симплекс-таблиц (исправленная версия)"""
+        """Генерация демонстрационных симплекс-таблиц (исправленная версия со знаками W)"""
         n = model['n_vars']
-        n_slack = 4  # s1, s2, s3, s4
-        n_art = 5  # a1, a2, a3, a4, a5
+        n_eq = model['A_eq'].shape[0] if model['A_eq'] is not None else 0
+        n_ub = model['A_ub'].shape[0] if model['A_ub'] is not None else 0
+        n_slack = n_ub
+        n_art = n_eq + n_ub
 
-        col_labels = ['x_B1', 'x_B2', 'x_B3']
+        col_labels = [f'x_{feed["name"]}' for feed in model['feeds']]
         for i in range(n_slack):
             col_labels.append(f's{i + 1}')
         for i in range(n_art):
             col_labels.append(f'a{i + 1}')
 
         m = n_art
+
+        if m == 0:
+            print("  Нет ограничений для симплекс-метода")
+            return
 
         # === ФАЗА 1 ===
         print("\n" + "=" * 60)
@@ -404,182 +478,111 @@ class FeedOptimizer:
 
         tableau = np.zeros((m + 1, n + n_slack + n_art + 1))
 
-        # Строка 0: a₂ = 4.28 - 3x₁ - x₂ → 3x₁ + x₂ + a₂ = 4.28
-        tableau[0, 0] = 3.0
-        tableau[0, 1] = 1.0
-        tableau[0, 2] = 0.0
-        tableau[0, n + 0] = 0.0  # s1
-        tableau[0, n + 1] = 0.0  # s2
-        tableau[0, n + 2] = 0.0  # s3
-        tableau[0, n + 3] = 0.0  # s4
-        tableau[0, n + n_slack + 0] = 0.0  # a1
-        tableau[0, n + n_slack + 1] = 1.0  # a2
-        tableau[0, n + n_slack + 2] = 0.0  # a3
-        tableau[0, n + n_slack + 3] = 0.0  # a4
-        tableau[0, n + n_slack + 4] = 0.0  # a5
-        tableau[0, -1] = 4.28
+        # Заполняем строки ограничений
+        row_idx = 0
 
-        # Строка 1: a₁ = -20 - s₁ + 2x₁ + 4x₂ + 6x₃
-        # → 2x₁ + 4x₂ + 6x₃ - s₁ - a₁ = 20
-        tableau[1, 0] = 2.0
-        tableau[1, 1] = 4.0
-        tableau[1, 2] = 6.0
-        tableau[1, n + 0] = -1.0  # -s1
-        tableau[1, n + 1] = 0.0
-        tableau[1, n + 2] = 0.0
-        tableau[1, n + 3] = 0.0
-        tableau[1, n + n_slack + 0] = -1.0  # -a1
-        tableau[1, n + n_slack + 1] = 0.0
-        tableau[1, n + n_slack + 2] = 0.0
-        tableau[1, n + n_slack + 3] = 0.0
-        tableau[1, n + n_slack + 4] = 0.0
-        tableau[1, -1] = 20.0
+        # Ограничения-равенства
+        if model['A_eq'] is not None and n_eq > 0:
+            for i in range(n_eq):
+                for j in range(n):
+                    tableau[row_idx, j] = model['A_eq'][i, j]
+                tableau[row_idx, n + n_slack + row_idx] = 1.0  # искусственная
+                tableau[row_idx, -1] = model['b_eq'][i]
+                row_idx += 1
 
-        # Строка 2: a₃ = -25 - s₂ + 5x₁ + 8x₂ + 3x₃
-        # → 5x₁ + 8x₂ + 3x₃ - s₂ - a₃ = 25
-        tableau[2, 0] = 5.0
-        tableau[2, 1] = 8.0
-        tableau[2, 2] = 3.0
-        tableau[2, n + 0] = 0.0
-        tableau[2, n + 1] = -1.0  # -s2
-        tableau[2, n + 2] = 0.0
-        tableau[2, n + 3] = 0.0
-        tableau[2, n + n_slack + 0] = 0.0
-        tableau[2, n + n_slack + 1] = 0.0
-        tableau[2, n + n_slack + 2] = -1.0  # -a3
-        tableau[2, n + n_slack + 3] = 0.0
-        tableau[2, n + n_slack + 4] = 0.0
-        tableau[2, -1] = 25.0
+        # Ограничения-неравенства (уже в форме <=)
+        if model['A_ub'] is not None and n_ub > 0:
+            for i in range(n_ub):
+                for j in range(n):
+                    tableau[row_idx, j] = model['A_ub'][i, j]
+                tableau[row_idx, n + i] = 1.0  # slack
+                tableau[row_idx, n + n_slack + row_idx] = 1.0  # искусственная
+                tableau[row_idx, -1] = model['b_ub'][i]
+                row_idx += 1
 
-        # Строка 3: a₄ = -40 - s₃ + 2x₁ + 4x₃
-        # → 2x₁ + 4x₃ - s₃ - a₄ = 40
-        tableau[3, 0] = 2.0
-        tableau[3, 1] = 0.0
-        tableau[3, 2] = 4.0
-        tableau[3, n + 0] = 0.0
-        tableau[3, n + 1] = 0.0
-        tableau[3, n + 2] = -1.0  # -s3
-        tableau[3, n + 3] = 0.0
-        tableau[3, n + n_slack + 0] = 0.0
-        tableau[3, n + n_slack + 1] = 0.0
-        tableau[3, n + n_slack + 2] = 0.0
-        tableau[3, n + n_slack + 3] = -1.0  # -a4
-        tableau[3, n + n_slack + 4] = 0.0
-        tableau[3, -1] = 40.0
+        # Строка W: W = Σ aᵢ → min
+        # Начально: W = Σ aᵢ, в таблице для минимизации меняем знак
+        # Устанавливаем -1 при искусственных переменных (для min)
+        for j in range(n_art):
+            tableau[-1, n + n_slack + j] = -1.0
 
-        # Строка 4: a₅ = 35 - s₄ - 5x₁ - 8x₂ - 3x₃
-        # → 5x₁ + 8x₂ + 3x₃ + s₄ + a₅ = 35
-        tableau[4, 0] = 5.0
-        tableau[4, 1] = 8.0
-        tableau[4, 2] = 3.0
-        tableau[4, n + 0] = 0.0
-        tableau[4, n + 1] = 0.0
-        tableau[4, n + 2] = 0.0
-        tableau[4, n + 3] = 1.0  # +s4
-        tableau[4, n + n_slack + 0] = 0.0
-        tableau[4, n + n_slack + 1] = 0.0
-        tableau[4, n + n_slack + 2] = 0.0
-        tableau[4, n + n_slack + 3] = 0.0
-        tableau[4, n + n_slack + 4] = 1.0  # +a5
-        tableau[4, -1] = 35.0
-
-        # Строка W: W = x₁ + 3x₂ + 10x₃ - s₁ - s₂ - s₃ - s₄ - 45.72
-        # Приводим к виду для симплекс-таблицы: W - x₁ - 3x₂ - 10x₃ + s₁ + s₂ + s₃ + s₄ = -45.72
-        tableau[5, 0] = -1.0  # -x₁
-        tableau[5, 1] = -3.0  # -x₂
-        tableau[5, 2] = -10.0  # -x₃
-        tableau[5, n + 0] = 1.0  # +s₁
-        tableau[5, n + 1] = 1.0  # +s₂
-        tableau[5, n + 2] = 1.0  # +s₃
-        tableau[5, n + 3] = 1.0  # +s₄
-        tableau[5, n + n_slack + 0] = 0.0
-        tableau[5, n + n_slack + 1] = 0.0
-        tableau[5, n + n_slack + 2] = 0.0
-        tableau[5, n + n_slack + 3] = 0.0
-        tableau[5, n + n_slack + 4] = 0.0
-        tableau[5, -1] = -45.72
-
-        # Вычитаем строки искусственных переменных, чтобы обнулить их коэффициенты в W
-        # Так как в W коэффициенты при a уже нулевые, вычитание не требуется
-        # Но нужно убедиться, что все a имеют коэффициенты 0 в строке W
-        # Проверяем и при необходимости вычитаем
+        # Вычитаем строки ограничений с коэффициентом -1
         for i in range(m):
-            for j in range(n_art):
-                if abs(tableau[5, n + n_slack + j]) > 1e-10:
-                    tableau[5, :] -= tableau[5, n + n_slack + j] * tableau[i, :]
-                    break
+            tableau[-1, :] -= (-1.0) * tableau[i, :]
+            # Это эквивалентно: tableau[-1, :] += tableau[i, :]
+
+        # После этого в W:
+        # - коэффициенты при небазисных = сумма их коэффициентов во всех строках
+        # - коэффициенты при базисных (искусственных) = 0
+        # - RHS = сумма всех правых частей
+        # Для минимизации W ищем положительные коэффициенты в W (вводим переменную,
+        # чтобы уменьшить W)
 
         basis = list(range(n + n_slack, n + n_slack + n_art))
         basis_names = [col_labels[b] for b in basis]
 
-        # Логируем начальную таблицу
         self._log_iteration(0, 1, tableau.copy(), basis_names, col_labels,
-                            "", "", (-1, -1), -tableau[5, -1])
+                            "", "", (-1, -1), tableau[-1, -1])
         print(f"  Итерация 0: Базис: {basis_names}")
-        print(f"    W = {-tableau[5, -1]:.4f}")
+        print(f"    W = {tableau[-1, -1]:.4f}")
 
         # Итерации Фазы 1
         iteration = 1
-        max_iterations = 20
+        max_iterations = 30
 
         while iteration <= max_iterations:
-            w_row = tableau[5, :-1]
+            w_row = tableau[-1, :-1]
 
-            # Находим наименьший отрицательный коэффициент в строке W
-            neg_indices = np.where(w_row < -1e-8)[0]
+            # Для минимизации W ищем положительные коэффициенты
+            # (вводим переменную с положительным коэффициентом, чтобы уменьшить W)
+            pos_indices = np.where(w_row > 1e-8)[0]
 
-            if len(neg_indices) == 0:
+            if len(pos_indices) == 0:
                 print(f"\n✓ Фаза 1 завершена на итерации {iteration - 1}")
+                print(f"   W = {tableau[-1, -1]:.6f}")
                 break
 
-            # Выбираем столбец с наименьшим (самым отрицательным) коэффициентом
-            pivot_col = neg_indices[np.argmin(w_row[neg_indices])]
+            # Выбираем наибольший положительный коэффициент
+            pivot_col = pos_indices[np.argmax(w_row[pos_indices])]
             entering = col_labels[pivot_col]
 
-            # Находим выводимую переменную по правилу минимального отношения
+            # Правило минимального отношения
             ratios = []
             for i in range(m):
                 if tableau[i, pivot_col] > 1e-8:
-                    ratio = tableau[i, -1] / tableau[i, pivot_col]
-                    ratios.append((ratio, i))
+                    ratios.append(tableau[i, -1] / tableau[i, pivot_col])
                 else:
-                    ratios.append((np.inf, i))
+                    ratios.append(np.inf)
 
-            # Находим строку с минимальным положительным отношением
-            min_ratio = np.inf
-            pivot_row = -1
-            for ratio, i in ratios:
-                if ratio > 1e-8 and ratio < min_ratio:
-                    min_ratio = ratio
-                    pivot_row = i
-
-            if pivot_row == -1:
-                print("  Нет допустимых ведущих элементов - задача не ограничена")
+            if all(np.isinf(r) for r in ratios):
+                print("  ⚠ Задача не ограничена (Фаза 1)")
                 break
 
+            pivot_row = int(np.argmin(ratios))
             leaving = col_labels[basis[pivot_row]]
             pivot_val = tableau[pivot_row, pivot_col]
 
             print(f"\n  Итерация {iteration}:")
             print(f"    Вводимая: {entering}")
             print(f"    Выводимая: {leaving}")
-            print(f"    Ведущий элемент: строка {pivot_row}, столбец {pivot_col}, значение = {pivot_val:.6f}")
+            print(f"    Ведущий элемент: [{pivot_row}, {pivot_col}] = {pivot_val:.6f}")
 
-            # Выполняем жорданово исключение
             tableau = self._pivot_operation(tableau, pivot_row, pivot_col)
-
-            # Обновляем базис
             basis[pivot_row] = pivot_col
             basis_names = [col_labels[b] for b in basis]
 
-            # Логируем итерацию
             self._log_iteration(iteration, 1, tableau.copy(), basis_names, col_labels,
-                                entering, leaving, (pivot_row, pivot_col), -tableau[5, -1])
-            print(f"    W = {-tableau[5, -1]:.6f}")
+                                entering, leaving, (pivot_row, pivot_col), tableau[-1, -1])
+            print(f"    Базис: {basis_names}")
+            print(f"    W = {tableau[-1, -1]:.6f}")
 
             iteration += 1
 
-        print(f"\n✓ Фаза 1 завершена. W = {-tableau[5, -1]:.6f}")
+        # Проверяем W ≈ 0
+        w_value = tableau[-1, -1]
+        if abs(w_value) > 1e-6:
+            print(f"\n⚠ W = {w_value:.6f} > 0 - допустимого решения нет")
+            return
 
         # === ФАЗА 2 ===
         print("\n" + "=" * 60)
@@ -591,107 +594,91 @@ class FeedOptimizer:
         tableau2 = np.delete(tableau, np.s_[art_start:art_start + n_art], axis=1)
         col_labels2 = col_labels[:art_start]
 
-        # Обновляем базис (индексы столбцов после удаления искусственных переменных)
-        basis2 = []
-        for b in basis:
-            if b < art_start:
-                basis2.append(b)
-            else:
-                # Это не должно произойти, так как искусственные должны быть выведены
-                basis2.append(b - n_art)
+        # Корректируем базис
+        basis2 = [b for b in basis if b < art_start]
 
-        # Создаём целевую функцию Z = 400*x1 + 200*x2 + 300*x3 → min
-        # Для симплекс-таблицы (максимизация) берём Z с противоположным знаком
-        # Z = 400x1 + 200x2 + 300x3
-        # В таблицу записываем: -Z + 400x1 + 200x2 + 300x3 = 0
+        # Если базисных переменных меньше чем строк - такого быть не должно при W=0
+        while len(basis2) < m:
+            for j in range(n, art_start):
+                if j not in basis2:
+                    basis2.append(j)
+                    break
 
-        # Обнуляем последнюю строку
+        # Целевая функция: Z = c₁x₁ + c₂x₂ + c₃x₃ → min
+        # В таблице: строка Z с коэффициентами cⱼ
         tableau2[-1, :] = 0
-        tableau2[-1, 0] = 400.0  # x1
-        tableau2[-1, 1] = 200.0  # x2
-        tableau2[-1, 2] = 300.0  # x3
+        for j in range(n):
+            tableau2[-1, j] = model['c'][j]
 
-        # Вычитаем строки базисных переменных, чтобы обнулить их коэффициенты в строке Z
+        # Обнуляем коэффициенты при базисных переменных в Z
         for i, bi in enumerate(basis2):
-            if bi < n:  # если базисная переменная - x1, x2, x3
+            if bi < n and i < tableau2.shape[0] - 1:
                 coeff = tableau2[-1, bi]
                 if abs(coeff) > 1e-10:
                     tableau2[-1, :] -= coeff * tableau2[i, :]
-            # slack переменные не имеют коэффициентов в Z
 
         basis_names2 = [col_labels2[b] for b in basis2]
 
-        # Логируем начало фазы 2
         self._log_iteration(0, 2, tableau2.copy(), basis_names2, col_labels2,
-                            "", "", (-1, -1), -tableau2[-1, -1])
-        print(f"\n  Начало Фазы 2: Базис: {basis_names2}")
-        print(f"    Z = {-tableau2[-1, -1]:.6f}")
+                            "", "", (-1, -1), tableau2[-1, -1])
+        print(f"  Начало Фазы 2: Базис: {basis_names2}")
+        print(f"    Z = {tableau2[-1, -1]:.6f}")
 
         # Итерации Фазы 2
         iteration = 1
-
         while iteration <= max_iterations:
             z_row = tableau2[-1, :-1]
 
-            # Находим наименьший отрицательный коэффициент в строке Z
-            # (так как мы максимизируем -Z, а Z минимизируем)
-            neg_indices = np.where(z_row < -1e-8)[0]
+            # Для минимизации Z ищем положительные коэффициенты
+            # (вводим переменную с положительным коэффициентом, чтобы уменьшить Z)
+            pos_indices = np.where(z_row > 1e-8)[0]
 
-            if len(neg_indices) == 0:
+            if len(pos_indices) == 0:
                 print(f"\n✓ Оптимум достигнут на итерации {iteration - 1}")
+                print(f"   Все коэффициенты в Z неположительны")
+                print(f"   Z = {tableau2[-1, -1]:.6f}")
                 break
 
-            # Выбираем столбец с наименьшим (самым отрицательным) коэффициентом
-            pivot_col = neg_indices[np.argmin(z_row[neg_indices])]
+            # Выбираем наибольший положительный коэффициент
+            pivot_col = pos_indices[np.argmax(z_row[pos_indices])]
             entering = col_labels2[pivot_col]
 
-            # Находим выводимую переменную
+            # Правило минимального отношения
             ratios = []
             for i in range(len(basis2)):
                 if tableau2[i, pivot_col] > 1e-8:
-                    ratio = tableau2[i, -1] / tableau2[i, pivot_col]
-                    ratios.append((ratio, i))
+                    ratios.append(tableau2[i, -1] / tableau2[i, pivot_col])
                 else:
-                    ratios.append((np.inf, i))
+                    ratios.append(np.inf)
 
-            min_ratio = np.inf
-            pivot_row = -1
-            for ratio, i in ratios:
-                if ratio > 1e-8 and ratio < min_ratio:
-                    min_ratio = ratio
-                    pivot_row = i
-
-            if pivot_row == -1:
-                print("  Нет допустимых ведущих элементов - задача не ограничена")
+            if all(np.isinf(r) for r in ratios):
+                print("  ⚠ Задача не ограничена (Фаза 2)")
                 break
 
+            pivot_row = int(np.argmin(ratios))
             leaving = col_labels2[basis2[pivot_row]]
             pivot_val = tableau2[pivot_row, pivot_col]
 
             print(f"\n  Итерация {iteration}:")
             print(f"    Вводимая: {entering}")
             print(f"    Выводимая: {leaving}")
-            print(f"    Ведущий элемент: строка {pivot_row}, столбец {pivot_col}, значение = {pivot_val:.6f}")
+            print(f"    Ведущий элемент: [{pivot_row}, {pivot_col}] = {pivot_val:.6f}")
 
-            # Выполняем жорданово исключение
             tableau2 = self._pivot_operation(tableau2, pivot_row, pivot_col)
-
-            # Обновляем базис
             basis2[pivot_row] = pivot_col
             basis_names2 = [col_labels2[b] for b in basis2]
 
-            # Логируем итерацию
             self._log_iteration(iteration, 2, tableau2.copy(), basis_names2, col_labels2,
-                                entering, leaving, (pivot_row, pivot_col), -tableau2[-1, -1])
-            print(f"    Z = {-tableau2[-1, -1]:.6f}")
+                                entering, leaving, (pivot_row, pivot_col), tableau2[-1, -1])
+            print(f"    Базис: {basis_names2}")
+            print(f"    Z = {tableau2[-1, -1]:.6f}")
 
             iteration += 1
 
         # Финальное логирование
         self._log_iteration(iteration, 2, tableau2.copy(), basis_names2, col_labels2,
                             "", "", (-1, -1), f_opt)
-
-        print(f"\n✓ Фаза 2 завершена. Оптимальное значение Z = {f_opt:.6f}\n")
+        print(f"\n✓ Фаза 2 завершена. Оптимальное Z = {f_opt:.6f}")
 
     def _pivot_operation(self, tableau: np.ndarray, pivot_row: int, pivot_col: int) -> np.ndarray:
         """Жорданово исключение"""
