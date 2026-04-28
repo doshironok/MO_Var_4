@@ -45,16 +45,19 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.tab_widget)
 
         # Создание вкладок
+        self.task_tab = self._create_task_tab()
         self.input_tab = InputTab()
         self.results_tab = ResultsTab()
         self.charts_tab = ChartsTab()
         self.analysis_tab = AnalysisTab()
         self.simplex_tab = SimplexTab()
 
+
         # Подключение сигналов
         self.input_tab.calculationRequested.connect(self.run_calculation)
 
         # Добавление вкладок
+        self.tab_widget.addTab(self.task_tab, "📋 Условие задачи")
         self.tab_widget.addTab(self.input_tab, "📝 Ввод данных")
         self.tab_widget.addTab(self.results_tab, "📊 Результаты")
         self.tab_widget.addTab(self.charts_tab, "📈 Графики")
@@ -328,6 +331,103 @@ class MainWindow(QMainWindow):
         dialog = GuideDialog(self)
         dialog.exec()
 
+    def _create_task_tab(self):
+        """Создание вкладки с условием задачи"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        title = QLabel("Условие задачи")
+        title.setProperty("role", "heading")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+        text_edit.setFont(QFont("Segoe UI", 11))
+        text_edit.setHtml("""
+        <div style='font-family: Segoe UI, Arial, sans-serif;'>
+            <h3 style='color: #2E7D32; margin: 20px 0;'>Постановка задачи</h3>
+            <p style='font-size: 12pt; line-height: 1.8;'>
+            Совхоз закупает корма трёх видов (B1, B2, B3). Цены на корма разные.
+            В кормах содержатся питательные вещества четырёх видов. Требуется так 
+            составить кормовой рацион, чтобы в нём содержалось необходимое количество 
+            питательных веществ и затраты на покупку кормов были минимальными.
+            </p>
+
+            <h3 style='color: #2E7D32; margin: 25px 0 15px 0;'>Исходные данные</h3>
+
+            <table style='border-collapse: collapse; width: 100%; margin: 15px 0; 
+                         font-size: 11pt; text-align: center;'>
+                <tr style='background-color: #E8F5E9;'>
+                    <th style='border: 1px solid #C8E6C9; padding: 10px;'>Питательные вещества, кг/т</th>
+                    <th style='border: 1px solid #C8E6C9; padding: 10px;'>B1</th>
+                    <th style='border: 1px solid #C8E6C9; padding: 10px;'>B2</th>
+                    <th style='border: 1px solid #C8E6C9; padding: 10px;'>B3</th>
+                    <th style='border: 1px solid #C8E6C9; padding: 10px;'>Нормы содержания веществ в рационе, кг</th>
+                </tr>
+                <tr>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>A1</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>2</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>4</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>6</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>не менее 20</td>
+                </tr>
+                <tr style='background-color: #F1F8F1;'>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>A2</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>3</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>1</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>0</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>равно 4,28</td>
+                </tr>
+                <tr>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>A3</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>5</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>8</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>3</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>не менее 25, не более 35</td>
+                </tr>
+                <tr style='background-color: #F1F8F1;'>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>A4</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>2</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>0</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>4</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'>не менее 40</td>
+                </tr>
+                <tr>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px; font-weight: bold;'>
+                        Цена за 1 т, тыс. руб</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px; font-weight: bold;'>400</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px; font-weight: bold;'>200</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px; font-weight: bold;'>300</td>
+                    <td style='border: 1px solid #C8E6C9; padding: 8px;'></td>
+                </tr>
+            </table>
+
+            <h3 style='color: #2E7D32; margin: 25px 0 15px 0;'>Вопросы, на которые отвечает программа</h3>
+            <ol style='font-size: 12pt; line-height: 2.0;'>
+                <li>Какое количество корма вида B2 следует закупить?</li>
+                <li>Какое общее количество кормов следует закупить?</li>
+                <li>Каковы будут минимальные затраты на покупку кормов (тыс. руб.)?</li>
+            </ol>
+
+            <h3 style='color: #2E7D32; margin: 25px 0 15px 0;'>Математическая модель</h3>
+            <p style='font-size: 12pt; line-height: 1.8;'>
+            <b>Переменные:</b> x₁, x₂, x₃ — количество кормов B1, B2, B3 (тонн)<br>
+            <b>Целевая функция:</b> Z = 400x₁ + 200x₂ + 300x₃ → min<br>
+            <b>Ограничения:</b><br>
+            &nbsp;&nbsp;1) 2x₁ + 4x₂ + 6x₃ ≥ 20 &nbsp;(A1)<br>
+            &nbsp;&nbsp;2) 3x₁ + x₂ = 4,28 &nbsp;(A2)<br>
+            &nbsp;&nbsp;3) 25 ≤ 5x₁ + 8x₂ + 3x₃ ≤ 35 &nbsp;(A3)<br>
+            &nbsp;&nbsp;4) 2x₁ + 4x₃ ≥ 40 &nbsp;(A4)<br>
+            &nbsp;&nbsp;5) x₁, x₂, x₃ ≥ 0
+            </p>
+        </div>
+        """)
+
+        layout.addWidget(text_edit)
+        return widget
+
 
 class AboutDialog(QDialog):
     """Диалог 'О программе'"""
@@ -472,3 +572,4 @@ class GuideDialog(QDialog):
         layout.addWidget(button_box)
 
         self.setLayout(layout)
+
