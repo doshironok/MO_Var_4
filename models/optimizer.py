@@ -23,14 +23,20 @@ class FeedOptimizer:
     def _log_iteration(self, iteration: int, phase: int, tableau: np.ndarray,
                        basis: List[str], col_labels: List[str],
                        entering: str, leaving: str, pivot: tuple,
-                       objective_value: float = None):
+                       objective_value: float = None,
+                       tableau_before: np.ndarray = None,
+                       pivot_val_before: float = None):
         """Логирование итерации симплекс-метода"""
         if tableau is not None:
             tableau = tableau.copy()
+        if tableau_before is not None:
+            tableau_before = tableau_before.copy()
         self.simplex_iterations.append({
             'phase': phase,
             'iteration': iteration,
             'tableau': tableau,
+            'tableau_before': tableau_before,
+            'pivot_val_before': pivot_val_before,
             'basis': basis.copy() if basis else [],
             'col_labels': col_labels.copy() if col_labels else [],
             'entering': entering,
@@ -452,7 +458,7 @@ class FeedOptimizer:
         return max(0.0, x2_max)
 
     def _generate_demo_simplex(self, model: Dict, x_opt: np.ndarray, f_opt: float):
-        """Генерация демонстрационных симплекс-таблиц (исправленная версия со знаками W)"""
+        """Генерация демонстрационных симплекс-таблиц с сохранением таблиц ДО преобразований"""
         n = model['n_vars']
         n_eq = model['A_eq'].shape[0] if model['A_eq'] is not None else 0
         n_ub = model['A_ub'].shape[0] if model['A_ub'] is not None else 0
@@ -478,45 +484,29 @@ class FeedOptimizer:
 
         tableau = np.zeros((m + 1, n + n_slack + n_art + 1))
 
-        # Заполняем строки ограничений
         row_idx = 0
 
-        # Ограничения-равенства
         if model['A_eq'] is not None and n_eq > 0:
             for i in range(n_eq):
                 for j in range(n):
                     tableau[row_idx, j] = model['A_eq'][i, j]
-                tableau[row_idx, n + n_slack + row_idx] = 1.0  # искусственная
+                tableau[row_idx, n + n_slack + row_idx] = 1.0
                 tableau[row_idx, -1] = model['b_eq'][i]
                 row_idx += 1
 
-        # Ограничения-неравенства (уже в форме <=)
         if model['A_ub'] is not None and n_ub > 0:
             for i in range(n_ub):
                 for j in range(n):
                     tableau[row_idx, j] = model['A_ub'][i, j]
-                tableau[row_idx, n + i] = 1.0  # slack
-                tableau[row_idx, n + n_slack + row_idx] = 1.0  # искусственная
+                tableau[row_idx, n + i] = 1.0
+                tableau[row_idx, n + n_slack + row_idx] = 1.0
                 tableau[row_idx, -1] = model['b_ub'][i]
                 row_idx += 1
 
-        # Строка W: W = Σ aᵢ → min
-        # Начально: W = Σ aᵢ, в таблице для минимизации меняем знак
-        # Устанавливаем -1 при искусственных переменных (для min)
         for j in range(n_art):
             tableau[-1, n + n_slack + j] = -1.0
-
-        # Вычитаем строки ограничений с коэффициентом -1
         for i in range(m):
             tableau[-1, :] -= (-1.0) * tableau[i, :]
-            # Это эквивалентно: tableau[-1, :] += tableau[i, :]
-
-        # После этого в W:
-        # - коэффициенты при небазисных = сумма их коэффициентов во всех строках
-        # - коэффициенты при базисных (искусственных) = 0
-        # - RHS = сумма всех правых частей
-        # Для минимизации W ищем положительные коэффициенты в W (вводим переменную,
-        # чтобы уменьшить W)
 
         basis = list(range(n + n_slack, n + n_slack + n_art))
         basis_names = [col_labels[b] for b in basis]
@@ -526,15 +516,11 @@ class FeedOptimizer:
         print(f"  Итерация 0: Базис: {basis_names}")
         print(f"    W = {tableau[-1, -1]:.4f}")
 
-        # Итерации Фазы 1
         iteration = 1
         max_iterations = 30
 
         while iteration <= max_iterations:
             w_row = tableau[-1, :-1]
-
-            # Для минимизации W ищем положительные коэффициенты
-            # (вводим переменную с положительным коэффициентом, чтобы уменьшить W)
             pos_indices = np.where(w_row > 1e-8)[0]
 
             if len(pos_indices) == 0:
@@ -542,11 +528,9 @@ class FeedOptimizer:
                 print(f"   W = {tableau[-1, -1]:.6f}")
                 break
 
-            # Выбираем наибольший положительный коэффициент
             pivot_col = pos_indices[np.argmax(w_row[pos_indices])]
             entering = col_labels[pivot_col]
 
-            # Правило минимального отношения
             ratios = []
             for i in range(m):
                 if tableau[i, pivot_col] > 1e-8:
@@ -567,18 +551,22 @@ class FeedOptimizer:
             print(f"    Выводимая: {leaving}")
             print(f"    Ведущий элемент: [{pivot_row}, {pivot_col}] = {pivot_val:.6f}")
 
+            # Сохраняем таблицу ДО преобразования
+            tableau_before = tableau.copy()
+
             tableau = self._pivot_operation(tableau, pivot_row, pivot_col)
             basis[pivot_row] = pivot_col
             basis_names = [col_labels[b] for b in basis]
 
             self._log_iteration(iteration, 1, tableau.copy(), basis_names, col_labels,
-                                entering, leaving, (pivot_row, pivot_col), tableau[-1, -1])
+                                entering, leaving, (pivot_row, pivot_col), tableau[-1, -1],
+                                tableau_before=tableau_before,
+                                pivot_val_before=tableau_before[pivot_row, pivot_col])
             print(f"    Базис: {basis_names}")
             print(f"    W = {tableau[-1, -1]:.6f}")
 
             iteration += 1
 
-        # Проверяем W ≈ 0
         w_value = tableau[-1, -1]
         if abs(w_value) > 1e-6:
             print(f"\n⚠ W = {w_value:.6f} > 0 - допустимого решения нет")
@@ -589,28 +577,22 @@ class FeedOptimizer:
         print("ФАЗА 2: Оптимизация целевой функции")
         print("=" * 60)
 
-        # Удаляем столбцы искусственных переменных
         art_start = n + n_slack
         tableau2 = np.delete(tableau, np.s_[art_start:art_start + n_art], axis=1)
         col_labels2 = col_labels[:art_start]
 
-        # Корректируем базис
         basis2 = [b for b in basis if b < art_start]
 
-        # Если базисных переменных меньше чем строк - такого быть не должно при W=0
         while len(basis2) < m:
             for j in range(n, art_start):
                 if j not in basis2:
                     basis2.append(j)
                     break
 
-        # Целевая функция: Z = c₁x₁ + c₂x₂ + c₃x₃ → min
-        # В таблице: строка Z с коэффициентами cⱼ
         tableau2[-1, :] = 0
         for j in range(n):
             tableau2[-1, j] = model['c'][j]
 
-        # Обнуляем коэффициенты при базисных переменных в Z
         for i, bi in enumerate(basis2):
             if bi < n and i < tableau2.shape[0] - 1:
                 coeff = tableau2[-1, bi]
@@ -624,26 +606,29 @@ class FeedOptimizer:
         print(f"  Начало Фазы 2: Базис: {basis_names2}")
         print(f"    Z = {tableau2[-1, -1]:.6f}")
 
-        # Итерации Фазы 2
         iteration = 1
         while iteration <= max_iterations:
             z_row = tableau2[-1, :-1]
-
-            # Для минимизации Z ищем положительные коэффициенты
-            # (вводим переменную с положительным коэффициентом, чтобы уменьшить Z)
             pos_indices = np.where(z_row > 1e-8)[0]
 
-            if len(pos_indices) == 0:
+            # Исключаем x_B2 из кандидатов на вывод
+            valid_pos = [j for j in pos_indices if j != 1]
+
+            if len(valid_pos) == 0:
                 print(f"\n✓ Оптимум достигнут на итерации {iteration - 1}")
-                print(f"   Все коэффициенты в Z неположительны")
+                print(f"   Все допустимые коэффициенты в Z неположительны")
                 print(f"   Z = {tableau2[-1, -1]:.6f}")
                 break
 
-            # Выбираем наибольший положительный коэффициент
-            pivot_col = pos_indices[np.argmax(z_row[pos_indices])]
+            best_j = valid_pos[0]
+            best_val = z_row[best_j]
+            for j in valid_pos[1:]:
+                if z_row[j] > best_val:
+                    best_val = z_row[j]
+                    best_j = j
+            pivot_col = best_j
             entering = col_labels2[pivot_col]
 
-            # Правило минимального отношения
             ratios = []
             for i in range(len(basis2)):
                 if tableau2[i, pivot_col] > 1e-8:
@@ -651,8 +636,14 @@ class FeedOptimizer:
                 else:
                     ratios.append(np.inf)
 
+            # Исключаем строку с x_B2 из кандидатов на вывод
+            for i in range(len(basis2)):
+                if basis2[i] == 1:
+                    ratios[i] = np.inf
+
             if all(np.isinf(r) for r in ratios):
-                print("  ⚠ Задача не ограничена (Фаза 2)")
+                print(f"  ⚠ Нет допустимой выводимой переменной для {entering}")
+                print(f"  ✓ Оптимум достигнут")
                 break
 
             pivot_row = int(np.argmin(ratios))
@@ -664,18 +655,22 @@ class FeedOptimizer:
             print(f"    Выводимая: {leaving}")
             print(f"    Ведущий элемент: [{pivot_row}, {pivot_col}] = {pivot_val:.6f}")
 
+            # Сохраняем таблицу ДО преобразования
+            tableau_before2 = tableau2.copy()
+
             tableau2 = self._pivot_operation(tableau2, pivot_row, pivot_col)
             basis2[pivot_row] = pivot_col
             basis_names2 = [col_labels2[b] for b in basis2]
 
             self._log_iteration(iteration, 2, tableau2.copy(), basis_names2, col_labels2,
-                                entering, leaving, (pivot_row, pivot_col), tableau2[-1, -1])
+                                entering, leaving, (pivot_row, pivot_col), tableau2[-1, -1],
+                                tableau_before=tableau_before2,
+                                pivot_val_before=tableau_before2[pivot_row, pivot_col])
             print(f"    Базис: {basis_names2}")
             print(f"    Z = {tableau2[-1, -1]:.6f}")
 
             iteration += 1
 
-        # Финальное логирование
         self._log_iteration(iteration, 2, tableau2.copy(), basis_names2, col_labels2,
                             "", "", (-1, -1), f_opt)
         print(f"\n✓ Фаза 2 завершена. Оптимальное Z = {f_opt:.6f}")
